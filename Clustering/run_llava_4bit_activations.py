@@ -4,6 +4,7 @@ import torch
 import sys
 import os
 import pickle
+import numpy as np
 from pathlib import Path
 
 # Get the directory where this script is located
@@ -64,7 +65,7 @@ def register_activation_hooks(model, layers=None):
     def get_activation_hook(layer_idx):
         def hook(module, input, output):
             # Extract hidden state and convert to float16 to save memory
-            hidden_state = output[0].detach().cpu().to(torch.float16)
+            hidden_state = output[0].detach().cpu().numpy().astype(np.float16)
             activations_store[layer_idx].append(hidden_state)
         return hook
     
