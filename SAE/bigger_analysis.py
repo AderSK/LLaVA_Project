@@ -11,9 +11,9 @@ BASE_PATH = "/home/cervenka25/large-data"
 IMAGE_DIR = os.path.join(BASE_PATH, "test2014")
 SAE_FILE = os.path.join(BASE_PATH, "CLIP-ViT-L-14-SAE-L11/11_resid/1000104192.pt")
 OUTPUT_DIR = "/home/cervenka25/LLaVA_Project/SAE/multi_seed"
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cuda"
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True) 
 
 bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
 processor = LlavaProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
