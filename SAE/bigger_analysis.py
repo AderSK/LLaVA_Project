@@ -32,7 +32,6 @@ vision_tower = model.model.vision_tower
 seeds = []
 all_features = {}
 
-# Process seed images
 for seed_img in seed_images:
     img = Image.open(os.path.join(IMAGE_DIR, seed_img)).convert("RGB")
     inputs = processor(text="Describe the image", images=img, return_tensors="pt").to(device)
@@ -48,12 +47,11 @@ for seed_img in seed_images:
     for fid in top_ids.cpu().numpy():
         fid_int = int(fid)
         heatmaps[fid_int] = latents[0, 1:, fid].cpu().numpy().reshape(24, 24)
-        all_features[fid_int] = []  # FIXED: No conditional check
+        all_features[fid_int] = []
     
     seeds.append({'img': img, 'name': seed_img, 'features': top_ids.cpu().numpy(), 
                   'vals': top_vals.cpu().numpy(), 'heatmaps': heatmaps})
 
-# Process all images - store only activation values, not heatmaps
 for img_name in tqdm(all_images):
     if img_name in seed_image_set:
         continue
@@ -70,19 +68,13 @@ for img_name in tqdm(all_images):
         
         for fid in all_features.keys():
             activation = acts[:, fid].sum().item()
-            # FIXED: Only store activation and path, compute heatmap later
-            all_features[fid].append({'act': activation, 
-                                      'path': os.path.join(IMAGE_DIR, img_name), 
-                                      'name': img_name})
+            all_features[fid].append({'act': activation, 'path': os.path.join(IMAGE_DIR, img_name), 'name': img_name})
     except:
         pass
 
-# Sort and keep top 5 for each feature
 for fid in all_features.keys():
     all_features[fid] = sorted(all_features[fid], key=lambda x: x['act'], reverse=True)[:5]
 
-# NOW compute heatmaps only for top 5 images per feature
-print("Computing heatmaps for top activating images...")
 for fid in tqdm(all_features.keys()):
     for ex in all_features[fid]:
         img = Image.open(ex['path']).convert("RGB")
@@ -94,7 +86,6 @@ for fid in tqdm(all_features.keys()):
         
         ex['heatmap'] = latents[0, 1:, fid].cpu().numpy().reshape(24, 24)
 
-# Visualization (unchanged)
 for i, seed in enumerate(seeds):
     fig = plt.figure(figsize=(22, 14))
     
