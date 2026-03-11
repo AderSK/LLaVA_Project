@@ -57,12 +57,54 @@ def load_model():
     return model, processor
 
 
+def get_llm_layers(model):
+    """
+    Return the transformer decoder layers regardless of which transformers
+    version is installed. Tries common attribute paths in order.
+    """
+    candidates = [
+        # Newer transformers (most common)
+        lambda m: m.language_model.model.layers,
+        # Some versions expose layers directly here
+        lambda m: m.language_model.layers,
+        # Older / alternative layout
+        lambda m: m.model.language_model.model.layers,
+        lambda m: m.model.layers,
+    ]
+    for fn in candidates:
+        try:
+            layers = fn(model)
+            if layers is not None:
+                print(f"  Found LLM layers at: {fn.__code__.co_consts[1] if hasattr(fn.__code__, 'co_consts') else '(see above)'}")
+                return layers
+        except AttributeError:
+            continue
+    # Last resort: search named modules for the decoder layer list
+    for name, module in model.named_modules():
+        if hasattr(module, '__len__') and 'layers' in name.lower():
+            try:
+                if len(module) > 10:   # sanity check — real LLM has many layers
+                    print(f"  Found LLM layers via named_modules at: {name}")
+                    return module
+            except TypeError:
+                continue
+    raise RuntimeError(
+        "Could not find transformer decoder layers. "
+        "Run: python -c \"from transformers import LlavaNextForConditionalGeneration; "
+        "m = LlavaNextForConditionalGeneration; print([n for n,_ in m.named_modules()])\" "
+        "to inspect the model structure."
+    )
+
+
 def register_activation_hooks(model, layers):
     """
     Register forward hooks on specified layers.
     Returns (activations_store dict, list of handles).
     """
-    total_layers = len(model.language_model.layers)
+    llm_layers = get_llm_layers(model)
+    total_layers = len(llm_layers)
+    print(f"  LLM has {total_layers} transformer layers")
+
     invalid = [l for l in layers if not (0 <= l < total_layers)]
     if invalid:
         raise ValueError(f"Layer(s) {invalid} out of range — model has {total_layers} layers (0–{total_layers-1})")
@@ -77,7 +119,7 @@ def register_activation_hooks(model, layers):
         return hook
 
     for l in layers:
-        handle = model.language_model.layers[l].register_forward_hook(make_hook(l))
+        handle = llm_layers[l].register_forward_hook(make_hook(l))
         handles.append(handle)
 
     return store, handles
@@ -166,7 +208,7 @@ def main():
 
     # Load model first so we know total layer count
     model, processor = load_model()
-    total_layers = len(model.language_model.layers)
+    total_layers = len(get_llm_layers(model))
     print(f"Model has {total_layers} layers")
 
     # Resolve which layers to collect
