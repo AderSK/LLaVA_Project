@@ -18,7 +18,7 @@ from transformers import CLIPVisionModel, CLIPImageProcessor
 from dictionary_learning.trainers.top_k import AutoEncoderTopK
 
 SAE_PATH = "/home/cervenka25/large-data/trained_sae/trainer_0/ae.pt"
-IMAGE_DIR = "/home/cervenka25/large-data/test2014"
+IMAGE_DIR = "/home/cervenka25/large-data/test2014" 
 DEVICE = "cuda:0"
 
 vision_tower = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14-336", use_safetensors=True).to(DEVICE).half()
@@ -37,7 +37,7 @@ for img_name in tqdm(all_images):
         
         with torch.no_grad():
             h = vision_tower(inputs.pixel_values.half(), output_hidden_states=True).hidden_states[11]
-            f = sae.encode(h)[0, 1:, :]
+            f = sae.encode(h)[0, 1:, :] 
             global_activations += f.sum(dim=0)
     except Exception:
         continue
@@ -45,13 +45,14 @@ for img_name in tqdm(all_images):
 data = global_activations.cpu().numpy()
 
 dead_features = (data == 0).sum()
+print(f"Dead Features: {dead_features} out of {D_SAE} ({(dead_features/D_SAE)*100:.2f}%)")
 
 plt.figure(figsize=(12, 6))
-plt.hist(data, bins=100, color='purple', alpha=0.7, log=True)
-plt.title("Globálna hustota aktivácií pre všetky SAE Features", fontsize=16)
-plt.xlabel("Súčet aktivácií", fontsize=12)
-plt.ylabel("Počet Features", fontsize=12)
-plt.grid(axis='y', alpha=0.3)
+plt.hist(data, bins=100, color='purple', alpha=0.7, log=True) 
 
+plt.title("Global Activation Density for all SAE Features", fontsize=16)
+plt.xlabel("Sum of Activations (Entire dataset)", fontsize=12)
+plt.ylabel("Number of Features (Log Scale)", fontsize=12)
+plt.grid(axis='y', alpha=0.3)
 plt.tight_layout()
-plt.savefig("activation_histogram.png", dpi=300)
+plt.savefig("global_activation_histogram_log.png", dpi=300)

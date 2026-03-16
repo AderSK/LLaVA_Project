@@ -18,12 +18,12 @@ from transformers import CLIPVisionModel, CLIPImageProcessor
 from dictionary_learning.trainers.top_k import AutoEncoderTopK
 
 SAE_PATH = "/home/cervenka25/large-data/trained_sae/trainer_0/ae.pt"
-IMAGE_DIR = "/home/cervenka25/large-data/test2014"
+IMAGE_DIR = "/home/cervenka25/large-data/test2014" 
 DEVICE = "cuda:0"
 NUM_FEATURES = 50
-GRID_SIZE = 10
+GRID_SIZE = 10 
 
-OUTPUT_DIR = "massive_kolaze"
+OUTPUT_DIR = "kolaze"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 vision_tower = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14-336", use_safetensors=True).to(DEVICE).half()
@@ -32,6 +32,7 @@ sae = AutoEncoderTopK.from_pretrained(SAE_PATH).to(DEVICE).half()
 
 D_SAE = sae.dict_size
 all_images = [f for f in os.listdir(IMAGE_DIR) if f.endswith('.jpg')]
+
 target_fids = random.sample(range(D_SAE), NUM_FEATURES)
 feature_tracker = {fid: [] for fid in target_fids}
 
@@ -49,7 +50,6 @@ for img_name in tqdm(all_images):
             
             if max_act > 0:
                 feature_tracker[fid].append((max_act, img_name))
-                
                 if len(feature_tracker[fid]) > GRID_SIZE * GRID_SIZE * 2:
                     feature_tracker[fid].sort(key=lambda x: x[0], reverse=True)
                     feature_tracker[fid] = feature_tracker[fid][:GRID_SIZE * GRID_SIZE]
@@ -58,22 +58,20 @@ for img_name in tqdm(all_images):
 
 for fid in tqdm(target_fids):
     matches = sorted(feature_tracker[fid], key=lambda x: x[0], reverse=True)[:GRID_SIZE * GRID_SIZE]
-    
     if len(matches) < 10:
         continue
 
     fig, axes = plt.subplots(GRID_SIZE, GRID_SIZE, figsize=(20, 20))
-    fig.subplots_adjust(wspace=0.2, hspace=0.02)
+    fig.subplots_adjust(wspace=0, hspace=0) 
     
     for i, ax in enumerate(axes.flatten()):
         if i < len(matches):
             act_val, match_name = matches[i]
             match_img = Image.open(os.path.join(IMAGE_DIR, match_name)).convert("RGB")
-            
             ax.imshow(match_img)
-            ax.text(0.05, 0.95, f"{act_val:.1f}", transform=ax.transAxes, color='lime', fontsize=12, weight='bold', verticalalignment='top', bbox=dict(facecolor='black', alpha=0.5, pad=1))
-        ax.axis('off')
         
-    plt.suptitle(f"Feature {fid} | Top {len(matches)} Images", fontsize=24, weight='bold')
-    plt.savefig(os.path.join(OUTPUT_DIR, f"velka_kolaz_feat_{fid}.jpg"), dpi=150, bbox_inches='tight')
+        ax.axis('off') 
+        
+    plt.suptitle(f"Feature {fid}", fontsize=28, weight='bold', y=0.92)
+    plt.savefig(os.path.join(OUTPUT_DIR, f"kolaz_feat_{fid}.jpg"), dpi=150, bbox_inches='tight', pad_inches=0.1)
     plt.close()
