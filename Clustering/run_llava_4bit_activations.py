@@ -5,6 +5,7 @@ import sys
 import os
 import pickle
 import numpy as np
+import gc
 from pathlib import Path
 
 # Get the directory where this script is located
@@ -16,7 +17,6 @@ def load_model():
 
     model_id = "llava-hf/llava-v1.6-mistral-7b-hf"
 
-    # Configure 4-bit quantization (uses ~4-5GB VRAM instead of ~7GB)
     quantization_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.float16,
@@ -24,10 +24,7 @@ def load_model():
         bnb_4bit_quant_type="nf4"
     )
 
-    # Load processor
     processor = LlavaNextProcessor.from_pretrained(model_id)
-
-    # Load model with quantization
     model = LlavaNextForConditionalGeneration.from_pretrained(
         model_id,
         quantization_config=quantization_config,
@@ -40,31 +37,15 @@ def load_model():
     return model, processor
 
 def register_activation_hooks(model, layers=None):
-    """
-    Register hooks to collect activations from specified layers.
-    
-    Args:
-        model: The LLaVA model
-        layers: List of layer indices to hook, or None for all layers
-    
-    Returns:
-        activations_store: Dictionary to store activations
-        handles: List of hook handles (to remove later)
-    """
-    # Get total number of layers
     total_layers = len(model.language_model.layers)
-    
-    # If no layers specified, hook all layers
     if layers is None:
         layers = list(range(total_layers))
     
     print(f"Registering hooks for {len(layers)} layers (out of {total_layers} total)")
-    
     activations_store = {layer: [] for layer in layers}
     
     def get_activation_hook(layer_idx):
         def hook(module, input, output):
-            # Extract hidden state and convert to float16 to save memory
             hidden_state = output[0].detach().cpu().numpy().astype(np.float16)
             activations_store[layer_idx].append(hidden_state)
         return hook
@@ -72,7 +53,6 @@ def register_activation_hooks(model, layers=None):
     handles = []
     for layer_idx in layers:
         if layer_idx >= total_layers:
-            print(f"Warning: Layer {layer_idx} doesn't exist (max: {total_layers-1})")
             continue
         layer_module = model.language_model.layers[layer_idx]
         handle = layer_module.register_forward_hook(get_activation_hook(layer_idx))
@@ -81,36 +61,25 @@ def register_activation_hooks(model, layers=None):
     return activations_store, handles
 
 def clear_activations(activations_store):
-    """Clear all stored activations"""
     for layer in activations_store:
         activations_store[layer].clear()
 
 def remove_hooks(handles):
-    """Remove all registered hooks"""
     for handle in handles:
         handle.remove()
     print("All hooks removed")
 
-def save_activations(activations_store, image_path, output_dir="activations"):
-    """
-    Save collected activations to a pickle file.
-    
-    Args:
-        activations_store: Dictionary of layer activations
-        image_path: Path to the original image
-        output_dir: Directory to save activations
-    """
+# --- UPDATED: Hardcoded target path and added parents=True ---
+def save_activations(activations_store, image_path, output_dir=r"C:\Users\samko\Desktop\Bakalarka\LLaVA_Project\Clustering\Activations"):
     output_path = Path(output_dir)
-    output_path.mkdir(exist_ok=True)
+    output_path.mkdir(parents=True, exist_ok=True)
     
-    # Create save data - take the first (and usually only) activation from each layer
     save_data = {
         "image_name": Path(image_path).name,
         "activations": {layer: activations_store[layer][0] if activations_store[layer] else None 
                        for layer in activations_store}
     }
     
-    # Save with image name
     save_file = output_path / f"{Path(image_path).stem}_activations.pkl"
     with open(save_file, "wb") as f:
         pickle.dump(save_data, f)
@@ -119,92 +88,43 @@ def save_activations(activations_store, image_path, output_dir="activations"):
     return save_file
 
 def resolve_image_path(image_path):
-    """Resolve image path - handles both absolute and relative paths"""
-    # Remove quotes if present
     image_path = image_path.strip('"').strip("'")
-
-    # If it's already an absolute path and exists, use it
     if os.path.isabs(image_path) and os.path.exists(image_path):
         return image_path
-
-    # Try relative to script directory
     script_relative = SCRIPT_DIR / image_path
     if script_relative.exists():
         return str(script_relative)
-
-    # Try relative to current working directory
     if os.path.exists(image_path):
         return image_path
-
-    # Path not found
     return None
 
 def analyze_image(image_path, question, model, processor, max_tokens=512, 
                   collect_activations=False, activations_store=None, save_activations_to_file=False):
-    """
-    Analyze an image with a question
-    
-    Args:
-        image_path: Path to the image
-        question: Question to ask about the image
-        model: The LLaVA model
-        processor: The LLaVA processor
-        max_tokens: Maximum tokens to generate
-        collect_activations: Whether to collect activations during generation
-        activations_store: Dictionary to store activations (required if collect_activations=True)
-        save_activations_to_file: Whether to save activations to a pickle file
-    
-    Returns:
-        response: Model's text response
-    """
     try:
-        # Resolve the path
         resolved_path = resolve_image_path(image_path)
-
         if resolved_path is None:
-            return f"Error: Could not find image at '{image_path}'\nTried:\n  - {image_path}\n  - {SCRIPT_DIR / image_path}\n  - Current directory: {os.getcwd()}"
+            return f"Error: Could not find image at '{image_path}'"
 
         print(f"Loading image from: {resolved_path}")
-
-        # Load image
         image = Image.open(resolved_path).convert('RGB')
 
-        # Prepare prompt (proper format for LLaVA 1.6)
         conversation = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": question},
-                ],
-            },
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": question}]},
         ]
         prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
-
-        # Process inputs
         inputs = processor(images=image, text=prompt, return_tensors="pt").to(model.device)
 
-        # Clear activations before generation if collecting
         if collect_activations and activations_store is not None:
             clear_activations(activations_store)
 
-        # Generate response
         print("Generating response...")
-        output = model.generate(
-            **inputs,
-            max_new_tokens=max_tokens,
-            do_sample=False
-        )
+        output = model.generate(**inputs, max_new_tokens=max_tokens, do_sample=False)
 
-        # Save activations if requested
         if collect_activations and save_activations_to_file and activations_store is not None:
             save_activations(activations_store, resolved_path)
 
-        # Decode and return
         response = processor.decode(output[0], skip_special_tokens=True)
 
-        # Extract just the answer (remove the prompt part)
-        # The response format varies, so we try multiple extraction methods
         if "assistant\n" in response.lower():
             parts = response.split("assistant\n")
             if len(parts) > 1:
@@ -217,23 +137,63 @@ def analyze_image(image_path, question, model, processor, max_tokens=512,
     except Exception as e:
         return f"Error: {str(e)}"
 
+def process_folder(folder_path, question, model, processor, collect_activations, activations_store, save_activations_flag):
+    folder_path = Path(folder_path.strip('"').strip("'"))
+    
+    if not folder_path.exists() or not folder_path.is_dir():
+        print(f"Error: Directory not found at: {folder_path}")
+        return
+
+    valid_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    image_files = [f for f in folder_path.iterdir() if f.suffix.lower() in valid_extensions]
+    image_files.sort() 
+    
+    if not image_files:
+        print(f"No valid images found in '{folder_path}'")
+        return
+
+    print(f"\nFound {len(image_files)} images. Starting sequential processing...")
+    
+    output_log_path = folder_path / "folder_results.txt"
+    with open(output_log_path, "w", encoding="utf-8") as log_file:
+        log_file.write(f"Prompt used: {question}\n")
+        log_file.write("="*60 + "\n\n")
+
+    for i, img_path in enumerate(image_files, 1):
+        print("\n" + "="*60)
+        print(f"Processing Image {i}/{len(image_files)}: {img_path.name}")
+        print("="*60)
+        
+        response = analyze_image(
+            str(img_path), 
+            question, 
+            model, 
+            processor,
+            collect_activations=collect_activations,
+            activations_store=activations_store,
+            save_activations_to_file=save_activations_flag
+        )
+        
+        print(f"\nResponse:\n{response}")
+        
+        with open(output_log_path, "a", encoding="utf-8") as log_file:
+            log_file.write(f"--- {img_path.name} ---\n{response}\n\n")
+        
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    print(f"\nFolder processing complete! All answers saved to: {output_log_path}")
+
 def main():
     print(f"Script directory: {SCRIPT_DIR}")
     print(f"Current working directory: {os.getcwd()}\n")
 
-    # Load model once
     model, processor = load_model()
 
     print("\n" + "="*60)
-    print("LLaVA is ready! You can now analyze images.")
-    print("="*60)
-    print("\nPath tips:")
-    print("  - Relative paths are relative to the script location")
-    print("  - Example: test_images\\image.png")
-    print("  - Or use full path: C:\\Users\\...\\image.jpg")
+    print("LLaVA is ready!")
     print("="*60)
     
-    # Ask if user wants to collect activations
     print("\nActivation Collection Mode:")
     print("  1. Normal mode (no activation collection)")
     print("  2. Collect activations (specify layers)")
@@ -244,12 +204,11 @@ def main():
     activations_store = None
     handles = []
     collect_activations = False
+    save_activations_flag = False
     
     if mode in ['2', '3']:
         collect_activations = True
-        
         if mode == '2':
-            # Get specific layers
             total_layers = len(model.language_model.layers)
             print(f"\nModel has {total_layers} layers (0-{total_layers-1})")
             layer_input = input("Enter layer indices (comma-separated, e.g., 10,15,20,25): ").strip()
@@ -259,55 +218,61 @@ def main():
                 print("Invalid input, using default layers [10, 15, 20, 25]")
                 layers = [10, 15, 20, 25]
         else:
-            # All layers
             layers = None
         
         activations_store, handles = register_activation_hooks(model, layers)
-        
-        # Ask if user wants to save activations
         save_choice = input("\nSave activations to files? (y/n): ").strip().lower()
         save_activations_flag = save_choice == 'y'
-    else:
-        save_activations_flag = False
 
-    # Interactive mode
-    while True:
-        print("\n" + "-"*60)
-        image_path = input("\nEnter image path (or 'quit' to exit): ").strip()
+    print("\nProcessing Mode:")
+    print("  1. Single Image Mode (Interactive)")
+    print("  2. Folder Mode (Process all images sequentially)")
+    proc_mode = input("\nSelect mode (1-2): ").strip()
 
-        if image_path.lower() in ['quit', 'exit', 'q']:
-            print("Goodbye!")
-            break
-
-        question = input("Enter your question about the image: ").strip()
-
+    if proc_mode == '2':
+        folder_path = input("\nEnter the folder path containing the images: ").strip()
+        question = input("Enter the single prompt to apply to ALL images: ").strip()
+        
         if not question:
             question = "Describe this image in detail."
-
-        response = analyze_image(
-            image_path, 
-            question, 
-            model, 
-            processor,
-            collect_activations=collect_activations,
-            activations_store=activations_store,
-            save_activations_to_file=save_activations_flag
+            
+        process_folder(
+            folder_path, question, model, processor,
+            collect_activations, activations_store, save_activations_flag
         )
+    else:
+        while True:
+            print("\n" + "-"*60)
+            image_path = input("\nEnter image path (or 'quit' to exit): ").strip()
 
-        print("\n" + "="*60)
-        print("Response:")
-        print("="*60)
-        print(response)
-        print("="*60)
-        
-        if collect_activations:
-            print(f"\nActivations collected for {len(activations_store)} layers")
-            for layer_idx in sorted(activations_store.keys()):
-                if activations_store[layer_idx]:
-                    act_shape = activations_store[layer_idx][0].shape
-                    print(f"  Layer {layer_idx}: {act_shape}")
+            if image_path.lower() in ['quit', 'exit', 'q']:
+                print("Goodbye!")
+                break
+
+            question = input("Enter your question about the image: ").strip()
+            if not question:
+                question = "Describe this image in detail."
+
+            response = analyze_image(
+                image_path, question, model, processor,
+                collect_activations=collect_activations,
+                activations_store=activations_store,
+                save_activations_to_file=save_activations_flag
+            )
+
+            print("\n" + "="*60)
+            print("Response:")
+            print("="*60)
+            print(response)
+            print("="*60)
+            
+            if collect_activations:
+                print(f"\nActivations collected for {len(activations_store)} layers")
+                for layer_idx in sorted(activations_store.keys()):
+                    if activations_store[layer_idx]:
+                        act_shape = activations_store[layer_idx][0].shape
+                        print(f"  Layer {layer_idx}: {act_shape}")
     
-    # Clean up hooks
     if handles:
         remove_hooks(handles)
 
