@@ -9,18 +9,18 @@ from dictionary_learning.training import trainSAE
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
 
-IMAGE_DIR = "/home/cervenka25/large-data/test2014"
+IMAGE_DIR = "/home/cervenka25/large-data/train2014"
 SAVE_DIR  = "/home/cervenka25/large-data/trained_sae"
 DEVICE    = "cuda:0"
 
 D_MODEL = 1024
 D_SAE   = 65536
-K       = 64
+K       = 64 # og 64
 LR      = 3e-4
 STEPS   = 50000
 BATCH   = 16
 WARMUP  = 2000
-LAYER   = 11
+LAYER   = 18 # og 11
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 vision_tower = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14-336").to(DEVICE).half()
@@ -73,6 +73,14 @@ ae = trainSAE(
     log_steps       = 500,
 )
 
-final_path = os.path.join(SAVE_DIR, "ae_final.pt")
-torch.save(ae.state_dict(), final_path)
-log.info(f"Training Complete! Saved to: {final_path}")
+final_path = os.path.join(SAVE_DIR, f"ae_layer{LAYER}_topk{K}.pt")
+
+if isinstance(ae, dict):
+    trained_model = list(ae.values())[0]
+elif isinstance(ae, tuple):
+    trained_model = list(ae[0].values())[0] if isinstance(ae[0], dict) else ae[0]
+else:
+    trained_model = ae
+
+final_path = os.path.join(SAVE_DIR, f"ae_layer{LAYER}_topk{K}.pt")
+torch.save(trained_model.state_dict(), final_path)
